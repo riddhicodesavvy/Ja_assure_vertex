@@ -1,267 +1,144 @@
-# JA Assure — Discover / Research Agent Backend
+# JA Assure — Research & Discovery Agent Backend
 
-Backend API for the JA Assure Research and Discover Agent. Provides structured, evidence-backed research intelligence for the JA Assure hackathon.
+*A deterministic evidence-processing pipeline and structured research intelligence engine for market intelligence, competitor tracking, and trend analysis.*
 
-## Architecture
+> **Architecture & Implementation Clarification:** While the repository name `Ja_assure_vertex` reflects the original hackathon project track, the implemented and tested production backend relies on a deterministic Python evidence processor, **Tavily Search API** for web retrieval, **Groq LLM** (`llama-3.3-70b` / `groq/compound`) for evidence-grounded synthesis, and **Supabase PostgreSQL** for persistence and caching.
+
+---
+
+## 🎯 Problem Statement & Motivation
+
+Automated research and competitive intelligence systems powered by raw LLMs frequently suffer from two critical flaws:
+1. **Hallucination & Fabricated Citations**: General-purpose LLMs generate convincing market claims but often fabricate URLs, attribute statistics to non-existent whitepapers, or blend timeline events.
+2. **Uncontrolled Search Costs & Rate Limits**: Unconstrained autonomous agents execute runaway search loops, leading to duplicate queries, irrelevant crawling, and high token overhead.
+
+**JA Assure's Discover Agent** solves this through a **strict separation of responsibilities**:
+- **Tavily** executes bounded, structured web searches and extractions.
+- **Python (Deterministic Engine)** cleans, normalizes, deduplicates (via SHA-256 hashing), date-filters, and detects changes.
+- **Groq LLM** acts solely as an evidence-bounded reasoning layer operating on pre-filtered JSON payloads with strict anti-hallucination verification.
+- **Supabase** maintains runs, evidence provenance, findings, and TTL-governed cache.
+
+---
+
+## 🏗️ System Architecture
 
 ```
-Research Request
-      ↓
-Research Planner (deterministic Python)
-      ↓
-Tavily (web research)
-      ↓
-Evidence Corpus
-      ↓
-Python Processing (normalize → dedup → filter → change detect)
-      ↓
-Groq (reasoning / synthesis — single batched call)
-      ↓
-Structured Findings + Confidence Scoring
-      ↓
-Supabase (persistence)
-      ↓
-FastAPI API → Frontend Team
+Research Request (Brand, Market, Research Type)
+                      │
+                      ▼
+        [Deterministic Research Planner]
+        • Selects query templates by ResearchType
+        • Bounds max API calls and extraction depth
+                      │
+                      ▼
+         [Tavily Research Adapter]
+        • Executes search / extract / crawl operations
+        • Isolates network retries and timeout boundaries
+                      │
+                      ▼
+         [Deterministic Evidence Engine]
+        • Normalization: Unicode NFC, date parsing
+        • Deduplication: SHA-256 content & URL hashing
+        • Relevance & Date Filtering
+        • Change Detection: Identifies UNCHANGED runs to skip LLM calls
+                      │
+                      ▼
+           [Groq Analysis Adapter]
+        • Structured JSON payload strictly containing filtered evidence
+        • Anti-Hallucination Guard: Validates every returned finding against
+          known evidence IDs; drops fabricated URLs automatically
+                      │
+                      ▼
+          [Supabase Persistence Layer]
+        • Atomic persistence of runs, evidence records, and findings
+        • Cache-first lookup with per-type TTL
+                      │
+                      ▼
+                 [FastAPI REST API]
+        • Endpoints consumed by frontend intelligence dashboards
 ```
 
-**Core rule:**
-- **TAVILY** = Find the information
-- **PYTHON** = Control and clean the information
-- **GROQ** = Understand the information
-- **SUPABASE** = Remember the information
+---
 
-## Setup
+## 🔬 Core Capabilities & Supported Research Types
 
-### 1. Prerequisites
+| Research Type | Focus Area | Planner Operations |
+| :--- | :--- | :--- |
+| `competitor_monitoring` | Launches, pricing changes, partnerships, leadership shifts | Targeted domain searches, changelog extraction, change detection |
+| `market_research` | Industry TAM/SAM trends, regulatory updates, macroeconomic shifts | Broad multi-angle search, relevance filtering |
+| `trend_research` | Emerging technology adoption, consumer sentiment, viral patterns | High-velocity news and article indexing |
+| `campaign_research` | Marketing initiatives, creative campaigns, brand positioning | Multi-channel social and press release aggregation |
+
+---
+
+## 🛡️ Anti-Hallucination & Evidence Provenance
+
+1. **Strict Reference Validation**: The output schema validator requires every finding to reference explicit `supporting_evidence_ids`. Any finding referencing a fabricated or non-existent evidence ID is automatically dropped.
+2. **Fabricated URL Filtering**: If the model introduces an external URL not present in the original source evidence corpus, the URL is scrubbed or the finding is flagged.
+3. **Change Detection**: When monitored competitor pages exhibit zero delta since the last run, the system marks the run as `UNCHANGED` and completely bypasses the LLM layer, saving API compute.
+
+---
+
+## 🚀 Setup & Execution
+
+### Prerequisites
 - Python 3.11+
-- A Supabase project
-- Tavily API key
+- Supabase PostgreSQL project with schema applied
+- Tavily Search API key
 - Groq API key
 
-### 2. Environment Variables
-
+### 1. Installation
 ```bash
-cp .env.example .env
-# Edit .env and fill in your credentials
-```
+# Clone repository
+git clone https://github.com/riddhicodesavvy/Ja_assure_vertex.git
+cd Ja_assure_vertex
 
-| Variable | Description |
-|---|---|
-| `TAVILY_API_KEY` | Tavily search API key |
-| `GROQ_API_KEY` | Groq API key for LLM analysis |
-| `GROQ_MODEL` | (Optional) Groq model ID. Default: `groq/compound` |
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase secret/service-role key (backend only) |
-
-### 3. Install Dependencies
-
-```bash
+# Create virtual environment
 python -m venv venv
-# Windows
-.\venv\Scripts\Activate.ps1
-# Linux/Mac
-source venv/bin/activate
+.\venv\Scripts\Activate.ps1  # On Windows
 
+# Install pinned dependencies
 pip install -r requirements.txt
 ```
 
-### 4. Database Setup
+### 2. Environment Configuration
+Configure `.env`:
+```ini
+TAVILY_API_KEY=your_tavily_key
+GROQ_API_KEY=your_groq_key
+GROQ_MODEL=groq/compound
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
 
-Apply the baseline migration to your Supabase project:
+### 3. Run Development Server
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+API documentation is accessible at `http://127.0.0.1:8000/docs`.
 
-1. Go to the Supabase Dashboard → SQL Editor
-2. Paste the contents of `migrations/001_baseline.sql`
-3. Click **Run**
+---
 
-This creates the following tables:
-- `competitors`
-- `research_runs`
-- `research_evidence`
-- `research_findings`
-- `research_cache`
+## 🧪 Verification & Automated Testing
 
-### 5. Seed Demo Data (Optional)
+The backend includes a comprehensive 125-test unit and pipeline verification suite:
 
 ```bash
-python scripts/seed_demo_data.py
+# Execute unit and pipeline test suite
+python -m pytest tests/ -v
 ```
 
-This creates a synthetic historical research run for **Jaguar Transit / Singapore / competitor_monitoring** so change detection has a baseline to compare against.
+*Test Coverage Highlights:*
+- `test_planner.py`: Verifies query generation, bounded call estimations, and complexity matching.
+- `test_normalization.py`: Verifies Unicode NFC handling, URL canonicalization, and date extraction.
+- `test_processing.py`: Verifies SHA-256 deduplication and relevance filtering.
+- `test_groq_validation.py`: Verifies anti-hallucination guards, JSON schema enforcement, and fabricated URL dropping.
+- `test_manager_pipeline.py`: Verifies end-to-end mocked execution from planning through cache storage.
+- `test_api_endpoints.py`: Verifies FastAPI request validation, error codes, and absence of exposed credentials.
 
-### 6. Start the Server
+---
 
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+## 📑 Research Limitations
 
-The API is available at `http://localhost:8000`.
-
-API docs: `http://localhost:8000/docs`
-
-## API Endpoints
-
-### `POST /discover/run`
-**Functionality:** Starts a new research run or returns a cached result if a recent run exists for the same parameters. It orchestrates the entire research pipeline: planning, web search (Tavily), processing, and reasoning (Groq).
-
-**Usage Example:**
-```bash
-curl -X 'POST' \
-  'http://localhost:8000/discover/run' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "brand": "Jaguar Transit",
-  "market": "Singapore",
-  "research_type": "competitor_monitoring",
-  "objective": "Identify recent competitor activity",
-  "competitors": ["BMW", "Mercedes"],
-  "topics": ["pricing", "new features"],
-  "lookback_days": 30,
-  "force_refresh": false,
-  "max_sources": 20
-}'
-```
-
-### `GET /discover/status`
-**Functionality:** Retrieves a lightweight status of the most recent research run for a specific brand, market, and research type. Useful for quickly checking when the last run occurred and its cache status.
-
-**Usage Example:**
-```bash
-curl -X 'GET' \
-  'http://localhost:8000/discover/status?brand=Jaguar%20Transit&market=Singapore&research_type=competitor_monitoring' \
-  -H 'accept: application/json'
-```
-
-### `GET /discover/{research_run_id}`
-**Functionality:** Retrieves the complete details of a specific research run using its unique UUID, including metadata, execution time, and all associated findings and evidence metrics.
-
-**Usage Example:**
-```bash
-curl -X 'GET' \
-  'http://localhost:8000/discover/550e8400-e29b-41d4-a716-446655440000' \
-  -H 'accept: application/json'
-```
-
-### `GET /discover/{research_run_id}/findings`
-**Functionality:** Retrieves only the structured findings (insights) generated by the AI for a specific research run. Supports filtering by confidence score and whether the finding is new or carried over.
-
-**Usage Example:**
-```bash
-# Get only new findings with confidence >= 80
-curl -X 'GET' \
-  'http://localhost:8000/discover/550e8400-e29b-41d4-a716-446655440000/findings?change_status=NEW&min_confidence=80' \
-  -H 'accept: application/json'
-```
-
-### `GET /discover/{research_run_id}/evidence`
-**Functionality:** Retrieves the raw evidence (articles, URLs, snippets) collected during a specific research run. Includes all evidence, even irrelevant ones, for full auditability. Can be filtered by relevance.
-
-**Usage Example:**
-```bash
-# Get only relevant evidence
-curl -X 'GET' \
-  'http://localhost:8000/discover/550e8400-e29b-41d4-a716-446655440000/evidence?relevance=RELEVANT' \
-  -H 'accept: application/json'
-```
-
-### `GET /health`
-**Functionality:** Performs a health check on the API and its external dependencies (Supabase, Tavily, Groq). Used by load balancers and monitoring tools to ensure the service is operational.
-
-**Usage Example:**
-```bash
-curl -X 'GET' \
-  'http://localhost:8000/health' \
-  -H 'accept: application/json'
-```
-
-## Research Types
-
-| Type | TTL | Default Lookback |
-|---|---|---|
-| `competitor_monitoring` | 24h | 30 days |
-| `market_research` | 24h | 90 days |
-| `trend_research` | 6h | 14 days |
-| `campaign_research` | 12h | 60 days |
-
-## Valid Markets
-
-- Singapore
-- Malaysia
-- Hong Kong
-- Indonesia
-- Thailand
-
-## Testing
-
-```bash
-pip install pytest
-pytest tests/ -v
-```
-
-Tests cover:
-- Request validation and hashing
-- URL/content normalization
-- Deduplication
-- Source quality classification
-- Relevance scoring
-- Change detection
-- Confidence scoring
-- Groq output validation (hallucination prevention)
-- Planner complexity and query generation
-
-## Project Structure
-
-```
-app/
-  main.py                          # FastAPI entrypoint
-  config.py                        # Settings from .env
-  core/
-    errors.py                      # Error handling
-    logging.py                     # Logger setup
-  api/
-    routes/
-      discover.py                  # API endpoints
-    schemas/
-      requests.py                  # Request Pydantic models
-      responses.py                 # Response Pydantic models
-  research/
-    manager.py                     # Central orchestrator
-    planner.py                     # Deterministic research planner
-    models.py                      # Domain models
-    enums.py                       # Enumerations
-    registry.py                    # Research type registry
-    exceptions.py                  # Research exceptions
-    adapters/
-      tavily.py                    # Tavily SDK adapter
-      groq.py                     # Groq SDK adapter
-    processing/
-      normalization.py             # URL/content normalization
-      deduplication.py             # Evidence deduplication
-      filtering.py                 # Relevance filtering & quality
-      change_detection.py          # Change detection vs prior runs
-      confidence.py                # Confidence scoring
-    repositories/
-      supabase.py                  # Supabase data access
-      cache.py                     # Cache management
-tests/                             # pytest test suite
-scripts/
-  seed_demo_data.py                # Demo data seeder
-migrations/
-  001_baseline.sql                 # Database schema
-```
-
-## Security
-
-- All API keys are backend-only (loaded from environment variables).
-- The frontend never receives Tavily, Groq, or Supabase service-role credentials.
-- No secret appears in any API response or log output.
-- The startup check warns if required credentials are missing.
-
-## Cost Controls
-
-1. **Cache first** — no Tavily/Groq calls before checking cache.
-2. **Skip Groq when nothing changed** — carry forward prior findings.
-3. **Deterministic planning** — zero LLM calls for query construction.
-4. **One batched Groq call per run** — never one call per article.
-5. **Query budget caps** — bounded Tavily spend per run.
-6. **Extract only when snippets are insufficient**.
+- **JavaScript-Rendered Sites**: The Tavily extraction layer parses HTML; dynamic client-side SPA applications without server-side rendering may yield partial text.
+- **Rate Limits & Budgets**: Search queries are bounded to prevent runaway costs; exhaustive crawling of large competitor intranets is intentionally restricted.
